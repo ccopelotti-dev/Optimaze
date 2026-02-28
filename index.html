@@ -29,6 +29,9 @@
     <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
     <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
 
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
@@ -132,137 +135,141 @@
             };
 
             const App = () => {
+                const supabaseUrl = 'https://dppbmtswplkfryxjfeee.supabase.co';
+                const supabaseKey = 'sb_publishable_C39Ln4C8ZY-P3oNIqBTLxw_QwFotQ-i';
+                const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+
                 const [isAuthenticated, setIsAuthenticated] = React.useState(false);
                 const [loginError, setLoginError] = React.useState(false);
                 const [activeMenu, setActiveMenu] = React.useState('axi_select');
                 const [currentUser, setCurrentUser] = React.useState(null);
 
                 // User Management State
-                const [users, setUsers] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_users');
-                    if (saved) {
-                        try { return JSON.parse(saved); } catch (e) { return []; }
-                    }
-                    return [{ id: 1, username: 'admin', password: 'optimaze', role: 'admin' }];
-                });
+                const [users, setUsers] = React.useState([]);
 
                 React.useEffect(() => {
-                    localStorage.setItem('optimaze_users', JSON.stringify(users));
-                }, [users]);
+                    const fetchUsers = async () => {
+                        const { data } = await supabase.from('users').select('*');
+                        if (data) setUsers(data);
+                    };
+                    fetchUsers();
+                }, []);
 
                 const [isUserModalVisible, setIsUserModalVisible] = React.useState(false);
                 const [userForm] = Form.useForm();
 
 
                 // Axi Select State
-                const [axiParams, setAxiParams] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_axi_params');
-                    if (saved) {
-                        try { return JSON.parse(saved); } catch (e) { return null; }
-                    }
-                    return { skill: 80, risk: 75, consistency: 85, experience: 70 };
-                });
+                const [axiParams, setAxiParams] = React.useState({ skill: 80, risk: 75, consistency: 85, experience: 70, stage: 'Acceleration' });
 
                 React.useEffect(() => {
-                    localStorage.setItem('optimaze_axi_params', JSON.stringify(axiParams));
-                }, [axiParams]);
+                    const fetchAxiParams = async () => {
+                        const { data } = await supabase.from('axi_select').select('*').single();
+                        if (data) {
+                            setAxiParams({
+                                id: data.id,
+                                skill: data.skill || 80,
+                                risk: data.risk || 75,
+                                consistency: data.consistency || 85,
+                                experience: data.experience || 70,
+                                stage: data.stage || 'Acceleration'
+                            });
+                        }
+                    };
+                    fetchAxiParams();
+                }, []);
 
                 const calculateEdgeScore = () => {
                     return Math.round((axiParams.skill + axiParams.risk + axiParams.consistency + axiParams.experience) / 4);
                 };
 
-                const handleAxiParamChange = (field, value) => {
-                    setAxiParams({ ...axiParams, [field]: value });
+                const handleAxiParamChange = async (field, value) => {
+                    const updatedParams = { ...axiParams, [field]: value };
+                    setAxiParams(updatedParams);
+                    if (axiParams.id) {
+                        await supabase.from('axi_select').update({ [field]: value }).eq('id', axiParams.id);
+                    } else {
+                        const { data } = await supabase.from('axi_select').insert([updatedParams]).select().single();
+                        if (data) setAxiParams({ ...updatedParams, id: data.id });
+                    }
                 };
 
                 // Axi Select Extensions (Edge History & Profitability)
-                const [edgeHistory, setEdgeHistory] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_edge_history');
-                    if (saved) {
-                        try {
-                            const parsed = JSON.parse(saved);
-                            // Filter legacy array elements which might be missing dateString
-                            const validRecords = parsed.filter(item => item && item.dateString && typeof item.score === 'number');
-                            if (validRecords.length > 0) return validRecords;
-                        } catch (e) {
-                            console.error("Failed to parse edgeHistory from localStorage", e);
-                        }
-                    }
-                    return [
-                        { id: 1, dateString: '2026-01-01', score: 50 },
-                        { id: 2, dateString: dayjs().format('YYYY-MM-DD'), score: calculateEdgeScore() }
-                    ];
-                });
+                const [edgeHistory, setEdgeHistory] = React.useState([]);
+
+                React.useEffect(() => {
+                    const fetchEdgeHistory = async () => {
+                        const { data } = await supabase.from('edge_history').select('*').order('dateString', { ascending: true });
+                        if (data) setEdgeHistory(data);
+                    };
+                    fetchEdgeHistory();
+                }, []);
 
                 const [newEdgeDate, setNewEdgeDate] = React.useState(null);
                 const [newEdgeScore, setNewEdgeScore] = React.useState(null);
 
-                const handleAddEdgeRecord = () => {
+                const handleAddEdgeRecord = async () => {
                     if (!newEdgeDate || newEdgeScore === null) {
                         message.warning('Por favor ingrese fecha y score.');
                         return;
                     }
-                    const newRecord = {
-                        id: Date.now(),
-                        dateString: newEdgeDate.format('YYYY-MM-DD'),
-                        score: newEdgeScore
-                    };
-
-                    const updatedHistory = [...edgeHistory, newRecord].sort((a, b) => new Date(a.dateString) - new Date(b.dateString));
-                    setEdgeHistory(updatedHistory);
-                    setNewEdgeDate(null);
-                    setNewEdgeScore(null);
-                    message.success('Registro añadido correctamente.');
+                    const newRecord = { dateString: newEdgeDate.format('YYYY-MM-DD'), score: newEdgeScore };
+                    const { data, error } = await supabase.from('edge_history').insert([newRecord]).select();
+                    if (data && data.length > 0) {
+                        const updatedHistory = [...edgeHistory, data[0]].sort((a, b) => new Date(a.dateString) - new Date(b.dateString));
+                        setEdgeHistory(updatedHistory);
+                        setNewEdgeDate(null);
+                        setNewEdgeScore(null);
+                        message.success('Registro añadido correctamente.');
+                    } else {
+                        message.error('Error al añadir registro.');
+                    }
                 };
 
-                const handleDeleteEdgeRecord = (id) => {
+                const handleDeleteEdgeRecord = async (id) => {
                     if (edgeHistory.length <= 1) {
                         message.warning('Debe mantener al menos un registro.');
                         return;
                     }
-                    setEdgeHistory(edgeHistory.filter(item => item.id !== id));
-                    message.success('Registro eliminado.');
+                    const { error } = await supabase.from('edge_history').delete().eq('id', id);
+                    if (!error) {
+                        setEdgeHistory(edgeHistory.filter(item => item.id !== id));
+                        message.success('Registro eliminado.');
+                    } else {
+                        message.error('Error al eliminar registro');
+                    }
                 };
 
-                React.useEffect(() => {
-                    localStorage.setItem('optimaze_edge_history', JSON.stringify(edgeHistory));
-                }, [edgeHistory]);
-
-                const [monthlyProfitability, setMonthlyProfitability] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_monthly_profitability');
-                    if (saved) {
-                        try { return JSON.parse(saved); } catch (e) { return []; }
-                    }
-                    return [
-                        { id: 1, month: 'Enero 2026', percentage: 2.5, amount: 1250 },
-                        { id: 2, month: 'Febrero 2026', percentage: 3.1, amount: 1550 }
-                    ];
-                });
+                const [monthlyProfitability, setMonthlyProfitability] = React.useState([]);
 
                 React.useEffect(() => {
-                    localStorage.setItem('optimaze_monthly_profitability', JSON.stringify(monthlyProfitability));
-                }, [monthlyProfitability]);
+                    const fetchMonthly = async () => {
+                        const { data } = await supabase.from('monthly_profitability').select('*');
+                        if (data) setMonthlyProfitability(data);
+                    };
+                    fetchMonthly();
+                }, []);
 
                 // Rendimiento Modal State
                 const [isMonthlyModalVisible, setIsMonthlyModalVisible] = React.useState(false);
                 const [monthlyForm] = Form.useForm();
 
-                const handleAddMonthlyRecord = () => {
-                    monthlyForm.validateFields().then(values => {
-                        const newRecord = {
-                            id: Date.now(),
-                            month: values.month,
-                            percentage: values.percentage,
-                            amount: values.amount
-                        };
-                        const updatedRecords = [...monthlyProfitability, newRecord];
-                        setMonthlyProfitability(updatedRecords);
-                        setIsMonthlyModalVisible(false);
-                        monthlyForm.resetFields();
-                        message.success('Mes de rendimiento guardado correctamente.');
-                    }).catch(info => {
+                const handleAddMonthlyRecord = async () => {
+                    try {
+                        const values = await monthlyForm.validateFields();
+                        const newRecord = { month: values.month, percentage: values.percentage, amount: values.amount };
+                        const { data, error } = await supabase.from('monthly_profitability').insert([newRecord]).select();
+                        if (data && data.length > 0) {
+                            setMonthlyProfitability([...monthlyProfitability, data[0]]);
+                            setIsMonthlyModalVisible(false);
+                            monthlyForm.resetFields();
+                            message.success('Mes de rendimiento guardado correctamente.');
+                        } else {
+                            message.error('Error al guardar el mes.');
+                        }
+                    } catch (info) {
                         console.log('Validate Failed:', info);
-                    });
+                    }
                 };
 
 
@@ -277,28 +284,24 @@
                 });
 
                 // Prop Trading State
-                const [propTradingData, setPropTradingData] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_prop_trading');
-                    if (saved) {
-                        try { return JSON.parse(saved); } catch (e) { return []; }
-                    }
-                    return [
-                        { id: '1', name: 'Tradeify PA #1', firm: 'Tradeify', balance: 50000.00, pnlDiario: 850.00, goal: 53000.00, type: 'Fase 1' },
-                        { id: '2', name: 'Topstep 150K', firm: 'Topstep', balance: 151200.00, pnlDiario: -200, goal: 159000.00, type: 'Real' }
-                    ];
-                });
+                const [propTradingData, setPropTradingData] = React.useState([]);
 
                 React.useEffect(() => {
-                    localStorage.setItem('optimaze_prop_trading', JSON.stringify(propTradingData));
-                }, [propTradingData]);
+                    const fetchPropTrading = async () => {
+                        const { data } = await supabase.from('prop_trading').select('*');
+                        if (data) setPropTradingData(data);
+                    };
+                    fetchPropTrading();
+                }, []);
 
                 const [isPropModalVisible, setIsPropModalVisible] = React.useState(false);
                 const [propForm] = Form.useForm();
 
-                const getProgressPercent = (balanceNew, goal) => {
-                    if (!goal || !balanceNew) return 0;
-                    const percent = (balanceNew / goal) * 100;
-                    return Math.min(Math.max(percent, 0), 100).toFixed(1);
+                const getProgressPercent = (balanceNew, balanceInitial, goal) => {
+                    if (!goal) return 0;
+                    if (balanceNew === balanceInitial) return 0;
+                    const percent = ((balanceNew - balanceInitial) / goal) * 100;
+                    return parseFloat(percent.toFixed(1));
                 };
 
                 const getProgressColor = (percent) => {
@@ -386,39 +389,80 @@
                     message.success('Cobro registrado con éxito.');
                 };
 
-                const handlePropSubmit = (values) => {
-                    const newAcc = { ...values, id: Date.now().toString() };
-                    setPropTradingData([...propTradingData, newAcc]);
-                    setIsPropModalVisible(false);
-                    propForm.resetFields();
-                    message.success('Cuenta Prop agregada con éxito.');
+                const handlePropSubmit = async (values) => {
+                    const newAcc = {
+                        firm: values.firm, name: values.name, type: values.type,
+                        balance: values.balance, pnlDiario: values.pnlDiario, goal: values.goal
+                    };
+                    const { data, error } = await supabase.from('prop_trading').insert([newAcc]).select();
+                    if (data && data.length > 0) {
+                        setPropTradingData([...propTradingData, data[0]]);
+                        setIsPropModalVisible(false);
+                        propForm.resetFields();
+                        message.success('Cuenta Prop agregada con éxito.');
+                    } else {
+                        message.error('Error al agregar cuenta Prop.');
+                    }
                 };
 
-                const handleDeleteProp = (id) => {
-                    setPropTradingData(propTradingData.filter(a => a.id !== id));
-                    message.success('Cuenta Prop eliminada.');
+                const handleDeleteProp = async (id) => {
+                    const { error } = await supabase.from('prop_trading').delete().eq('id', id);
+                    if (!error) {
+                        setPropTradingData(propTradingData.filter(a => a.id !== id));
+                        message.success('Cuenta Prop eliminada.');
+                    } else {
+                        message.error('Error al eliminar cuenta Prop.');
+                    }
                 };
 
 
-                const handleUserSubmit = (values) => {
-                    const newUser = { ...values, id: Date.now(), role: 'user' };
-                    setUsers([...users, newUser]);
-                    setIsUserModalVisible(false);
-                    userForm.resetFields();
-                    message.success('Usuario creado con éxito.');
+                const handleUserSubmit = async (values) => {
+                    const newUser = { username: values.username, password: values.password, role: 'user' };
+                    const { data, error } = await supabase.from('users').insert([newUser]).select();
+                    if (data && data.length > 0) {
+                        setUsers([...users, data[0]]);
+                        setIsUserModalVisible(false);
+                        userForm.resetFields();
+                        message.success('Usuario creado con éxito.');
+                    } else {
+                        message.error('Error al crear usuario.');
+                    }
                 };
 
-                const handleDeleteUser = (id) => {
+                const handleDeleteUser = async (id) => {
                     if (users.length === 1) {
                         message.error('No se puede eliminar el último usuario.');
                         return;
                     }
-                    setUsers(users.filter(u => u.id !== id));
-                    message.success('Usuario eliminado.');
+                    const { error } = await supabase.from('users').delete().eq('id', id);
+                    if (!error) {
+                        setUsers(users.filter(u => u.id !== id));
+                        message.success('Usuario eliminado.');
+                    } else {
+                        message.error('Error al eliminar usuario.');
+                    }
                 };
 
-                const handleLogin = (values) => {
-                    const validUser = users.find(u => u.username === values.username && u.password === values.password);
+                const handleLogin = async (values) => {
+                    let { data: validUser, error } = await supabase.from('users')
+                        .select('*')
+                        .eq('username', values.username)
+                        .eq('password', values.password)
+                        .single();
+
+                    if (!validUser && values.username === 'admin' && values.password === 'optimaze') {
+                        const { data: allUsers } = await supabase.from('users').select('*');
+                        if (!allUsers || allUsers.length === 0) {
+                            const { data: newUser } = await supabase.from('users').insert([
+                                { username: 'admin', password: 'optimaze', role: 'admin' }
+                            ]).select().single();
+                            if (newUser) {
+                                validUser = newUser;
+                                setUsers([validUser]);
+                            }
+                        }
+                    }
+
                     if (validUser) {
                         setIsAuthenticated(true);
                         setCurrentUser(validUser);
@@ -563,7 +607,15 @@
                                                         <div>
                                                             <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Estado de Sociedad</Text>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                                <Title level={3} style={{ margin: 0, color: '#1a1d20' }}>Axi Select: Acceleration</Title>
+                                                                <Title level={3} style={{ margin: 0, color: '#1a1d20' }}>Axi Select: {axiParams.stage}</Title>
+                                                                <Select value={axiParams.stage} onChange={(val) => handleAxiParamChange('stage', val)} style={{ width: 140 }}>
+                                                                    <Select.Option value="Seed">Seed</Select.Option>
+                                                                    <Select.Option value="Incubation">Incubation</Select.Option>
+                                                                    <Select.Option value="Acceleration">Acceleration</Select.Option>
+                                                                    <Select.Option value="Pro">Pro</Select.Option>
+                                                                    <Select.Option value="Pro 500">Pro 500</Select.Option>
+                                                                    <Select.Option value="Pro M">Pro M</Select.Option>
+                                                                </Select>
                                                                 <Tag color="blue" style={{ margin: 0, borderRadius: 12, padding: '2px 12px' }}>Actual</Tag>
                                                             </div>
                                                         </div>
@@ -939,8 +991,15 @@
                                                                             width: '25%',
                                                                             render: (_, record) => {
                                                                                 const balanceNew = record.balance + (record.pnlDiario || 0);
-                                                                                const percent = getProgressPercent(balanceNew, record.goal);
-                                                                                return <Progress percent={percent} strokeColor={getProgressColor(percent)} trailColor="#e8ecef" />;
+                                                                                const percent = getProgressPercent(balanceNew, record.balance, record.goal);
+                                                                                return (
+                                                                                    <Progress
+                                                                                        percent={Math.max(0, Math.min(percent, 100))}
+                                                                                        strokeColor={percent < 0 ? '#ff4d4f' : getProgressColor(percent)}
+                                                                                        trailColor="#e8ecef"
+                                                                                        format={() => <span style={{ color: percent < 0 ? '#ff4d4f' : 'inherit' }}>{percent}%</span>}
+                                                                                    />
+                                                                                );
                                                                             }
                                                                         },
                                                                         {
@@ -1160,8 +1219,8 @@
                                             </Form.Item>
                                         </Col>
                                         <Col span={8}>
-                                            <Form.Item name="goal" label="Meta / Retiro" rules={[{ required: true }]}>
-                                                <InputNumber min={0} style={{ width: '100%' }} prefix="$" />
+                                            <Form.Item name="goal" label="Meta / Retiro (Ganancia a alcanzar)" rules={[{ required: true }]}>
+                                                <InputNumber style={{ width: '100%' }} prefix="$" placeholder="Ej. 1000" />
                                             </Form.Item>
                                         </Col>
                                     </Row>
