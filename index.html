@@ -164,7 +164,7 @@
 
                 React.useEffect(() => {
                     const fetchAxiParams = async () => {
-                        const { data } = await supabase.from('axi_select').select('*').single();
+                        const { data } = await supabase.from('axi_select_data').select('*').single();
                         if (data) {
                             setAxiParams({
                                 id: data.id,
@@ -187,9 +187,9 @@
                     const updatedParams = { ...axiParams, [field]: value };
                     setAxiParams(updatedParams);
                     if (axiParams.id) {
-                        await supabase.from('axi_select').update({ [field]: value }).eq('id', axiParams.id);
+                        await supabase.from('axi_select_data').update({ [field]: value }).eq('id', axiParams.id);
                     } else {
-                        const { data } = await supabase.from('axi_select').insert([updatedParams]).select().single();
+                        const { data } = await supabase.from('axi_select_data').insert([updatedParams]).select().single();
                         if (data) setAxiParams({ ...updatedParams, id: data.id });
                     }
                 };
@@ -288,7 +288,7 @@
 
                 React.useEffect(() => {
                     const fetchPropTrading = async () => {
-                        const { data } = await supabase.from('prop_trading').select('*');
+                        const { data } = await supabase.from('prop_accounts').select('*');
                         if (data) setPropTradingData(data);
                     };
                     fetchPropTrading();
@@ -311,82 +311,53 @@
                     return '#ff4d4f'; // Red/Danger
                 };
                 // Micro-Accounting State
-                const [transactions, setTransactions] = React.useState(() => {
-                    const saved = localStorage.getItem('optimaze_accounting');
-                    if (saved) {
-                        try { return JSON.parse(saved); } catch (e) { return []; }
-                    }
-                    return [
-                        { id: 1, type: 'INCOME', category: 'Retiro Axi', amount: 3500, date: '2026-02-01', currency: 'USD' },
-                        { id: 2, type: 'EXPENSE', category: 'Capital de Trabajo', amount: 500, date: '2026-02-02', currency: 'USD' },
-                        { id: 3, type: 'EXPENSE', category: 'Activos Amortizables', amount: 1200, date: '2026-02-15', currency: 'USD', usefulLifeMonths: 12 }
-                    ];
-                });
+                const [transactions, setTransactions] = React.useState([]);
 
-                React.useEffect(() => {
-                    localStorage.setItem('optimaze_accounting', JSON.stringify(transactions));
-                }, [transactions]);
-
-                const [isExpenseModalVisible, setIsExpenseModalVisible] = React.useState(false);
-                const [isIncomeModalVisible, setIsIncomeModalVisible] = React.useState(false);
-                const [expenseForm] = Form.useForm();
-                const [incomeForm] = Form.useForm();
-
-                const expenseCurrency = Form.useWatch('currency', expenseForm);
-                const expenseCategory = Form.useWatch('category', expenseForm);
-
-                // Financial Calculations
-                const today = new Date();
-                let inversionFlota = 0;
-                let valorActivosBruto = 0;
-                let depreciacionAcumulada = 0;
-                let gastosServicios = 0;
-                let totalIngresos = 0;
-
-                transactions.forEach(t => {
-                    const amountUSD = t.currency === 'ARS' ? (t.amount / t.exchangeRate) : t.amount;
-                    if (t.type === 'INCOME') {
-                        totalIngresos += amountUSD;
-                    } else if (t.type === 'EXPENSE') {
-                        if (t.category === 'Capital de Trabajo') {
-                            inversionFlota += amountUSD;
-                        } else if (t.category === 'Servicios') {
-                            gastosServicios += amountUSD;
-                        } else if (t.category === 'Activos Amortizables') {
-                            valorActivosBruto += amountUSD;
-                            if (t.usefulLifeMonths) {
-                                const txDate = new Date(t.date);
-                                const diffTime = Math.abs(today - txDate);
-                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                const diffMonths = diffDays / 30.44;
-                                const monthlyDepreciation = amountUSD / t.usefulLifeMonths;
-                                const totalDepreciated = Math.min(amountUSD, diffMonths * monthlyDepreciation);
-                                depreciacionAcumulada += totalDepreciated;
-                            } else {
-                                depreciacionAcumulada += amountUSD;
-                            }
-                        }
-                    }
-                });
-
-                const totalGastosReales = inversionFlota + gastosServicios + depreciacionAcumulada;
-                const beneficioNetoReal = totalIngresos - totalGastosReales;
-                const valorActivosNeto = valorActivosBruto - depreciacionAcumulada;
-
-                const handleExpenseSubmit = (values) => {
-                    const newTx = { ...values, id: Date.now(), type: 'EXPENSE' };
-                    setTransactions([...transactions, newTx]);
-                    setIsExpenseModalVisible(false);
-                    expenseForm.resetFields();
-                    message.success('Gasto registrado con éxito.');
+                const fetchTransactions = async () => {
+                    const { data, error } = await supabase.from('accounting').select('*').order('date', { ascending: false });
+                    if (data) setTransactions(data);
                 };
 
-                const handleIncomeSubmit = (values) => {
-                    const newTx = { ...values, id: Date.now(), type: 'INCOME' };
-                    setTransactions([...transactions, newTx]);
-                    setIsIncomeModalVisible(false);
-                    incomeForm.resetFields();
-                    message.success('Cobro registrado con éxito.');
+                React.useEffect(() => {
+                    fetchTransactions();
+                }, []);
+
+                const [isMovementModalVisible, setIsMovementModalVisible] = React.useState(false);
+                const [movementForm] = Form.useForm();
+
+                // Financial Calculations
+                let totalIncome = 0;
+                let totalExpense = 0;
+
+                transactions.forEach(t => {
+                    const amountUSD = Number(t.amount) || 0;
+                    if (t.type === 'INCOME') {
+                        totalIncome += amountUSD;
+                    } else if (t.type === 'EXPENSE') {
+                        totalExpense += amountUSD;
+                    }
+                });
+
+                const beneficioNetoReal = totalIncome - totalExpense;
+                const capitalDeTrabajo = totalIncome - totalExpense;
+
+                const handleMovementSubmit = async (values) => {
+                    const newTx = {
+                        date: dayjs().format('YYYY-MM-DD'),
+                        type: values.type,
+                        category: values.category,
+                        amount: values.amount,
+                        description: values.description || ''
+                    };
+                    const { data, error } = await supabase.from('accounting').insert([newTx]).select();
+                    if (data && data.length > 0) {
+                        message.success('Movimiento registrado con éxito.');
+                        setIsMovementModalVisible(false);
+                        movementForm.resetFields();
+                        fetchTransactions();
+                    } else {
+                        message.error('Error al registrar movimiento.');
+                    }
                 };
 
                 const handlePropSubmit = async (values) => {
@@ -394,7 +365,7 @@
                         firm: values.firm, name: values.name, type: values.type,
                         balance: values.balance, pnlDiario: values.pnlDiario, goal: values.goal
                     };
-                    const { data, error } = await supabase.from('prop_trading').insert([newAcc]).select();
+                    const { data, error } = await supabase.from('prop_accounts').insert([newAcc]).select();
                     if (data && data.length > 0) {
                         setPropTradingData([...propTradingData, data[0]]);
                         setIsPropModalVisible(false);
@@ -406,7 +377,7 @@
                 };
 
                 const handleDeleteProp = async (id) => {
-                    const { error } = await supabase.from('prop_trading').delete().eq('id', id);
+                    const { error } = await supabase.from('prop_accounts').delete().eq('id', id);
                     if (!error) {
                         setPropTradingData(propTradingData.filter(a => a.id !== id));
                         message.success('Cuenta Prop eliminada.');
@@ -558,38 +529,28 @@
                                             </div>
                                             {activeMenu === 'accounting' && (
                                                 <Space>
-                                                    <Button type="primary" danger icon={<FallOutlined />} onClick={() => setIsExpenseModalVisible(true)}>Registrar Gasto</Button>
-                                                    <Button type="primary" icon={<RiseOutlined />} style={{ background: '#00b96b', borderColor: '#00b96b' }} onClick={() => setIsIncomeModalVisible(true)}>Registrar Cobro</Button>
+                                                    <Button type="primary" icon={<PlusOutlined />} style={{ background: '#00b96b', borderColor: '#00b96b' }} onClick={() => setIsMovementModalVisible(true)}>Registrar Movimiento</Button>
                                                 </Space>
                                             )}
                                         </div>
 
                                         {activeMenu === 'accounting' && (
                                             <Row gutter={24} style={{ marginBottom: 24 }}>
-                                                <Col xs={24} sm={8}>
-                                                    <Card className="premium-card" style={{ borderLeft: '4px solid #d29922' }}>
+                                                <Col xs={24} sm={12}>
+                                                    <Card className="premium-card" style={{ borderLeft: '4px solid #1677ff' }}>
                                                         <Statistic
-                                                            title="Inversión en Cap. Trabajo"
-                                                            value={inversionFlota}
+                                                            title="Capital de Trabajo"
+                                                            value={capitalDeTrabajo}
                                                             precision={2}
                                                             prefix="$"
+                                                            valueStyle={{ color: capitalDeTrabajo >= 0 ? '#1677ff' : '#ff4d4f' }}
                                                         />
                                                     </Card>
                                                 </Col>
-                                                <Col xs={24} sm={8}>
-                                                    <Card className="premium-card" style={{ borderLeft: '4px solid #58a6ff' }}>
-                                                        <Statistic
-                                                            title="Valor Activos (Neto de Dep.)"
-                                                            value={valorActivosNeto}
-                                                            precision={2}
-                                                            prefix="$"
-                                                        />
-                                                    </Card>
-                                                </Col>
-                                                <Col xs={24} sm={8}>
+                                                <Col xs={24} sm={12}>
                                                     <Card className="premium-card" style={{ borderLeft: '4px solid #00b96b' }}>
                                                         <Statistic
-                                                            title="Beneficio Neto Real"
+                                                            title="Beneficio Neto"
                                                             value={beneficioNetoReal}
                                                             precision={2}
                                                             prefix="$"
@@ -1033,14 +994,18 @@
                                                             title: 'Tipo',
                                                             dataIndex: 'type',
                                                             key: 'type',
-                                                            render: text => <Tag color={text === 'INCOME' ? 'green' : 'red'}>{text === 'INCOME' ? 'Cobro' : 'Gasto'}</Tag>
+                                                            render: text => <Tag color={text === 'INCOME' ? 'green' : 'red'}>{text === 'INCOME' ? 'Ingreso' : 'Egreso'}</Tag>
                                                         },
                                                         { title: 'Categoría', dataIndex: 'category', key: 'category' },
                                                         { title: 'Descripción', dataIndex: 'description', key: 'description' },
                                                         {
-                                                            title: 'Monto Original',
-                                                            key: 'amountOriginal',
-                                                            render: (_, record) => `${record.currency === 'USD' ? '$' : 'ARS '}${record.amount.toLocaleString()}`
+                                                            title: 'Monto',
+                                                            key: 'amount',
+                                                            render: (_, record) => (
+                                                                <span style={{ color: record.type === 'INCOME' ? '#00b96b' : '#ff4d4f', fontWeight: 'bold' }}>
+                                                                    {record.type === 'INCOME' ? '+' : '-'}${Number(record.amount).toLocaleString()}
+                                                                </span>
+                                                            )
                                                         }
                                                     ]}
                                                     pagination={{ pageSize: 10 }}
@@ -1088,71 +1053,28 @@
                             </Layout>
 
                             {/* Modals for Accounting */}
-                            <Modal title="Registrar Gasto" open={isExpenseModalVisible} onCancel={() => setIsExpenseModalVisible(false)} footer={null}>
-                                <Form form={expenseForm} layout="vertical" onFinish={handleExpenseSubmit}>
-                                    <Form.Item name="date" label="Fecha" rules={[{ required: true }]} initialValue={dayjs().format('YYYY-MM-DD')}>
-                                        <Input type="date" />
+                            <Modal title="Registrar Movimiento" open={isMovementModalVisible} onCancel={() => setIsMovementModalVisible(false)} footer={null}>
+                                <Form form={movementForm} layout="vertical" onFinish={handleMovementSubmit}>
+                                    <Form.Item name="type" label="Tipo" rules={[{ required: true }]} initialValue="INCOME">
+                                        <Select>
+                                            <Select.Option value="INCOME">Ingreso</Select.Option>
+                                            <Select.Option value="EXPENSE">Egreso</Select.Option>
+                                        </Select>
                                     </Form.Item>
                                     <Form.Item name="category" label="Categoría" rules={[{ required: true }]}>
                                         <Select>
-                                            <Select.Option value="Capital de Trabajo">Capital de Trabajo (Software, Cuentas, Evaluaciones)</Select.Option>
-                                            <Select.Option value="Servicios">Servicios (Internet, Suscripciones recurrentes)</Select.Option>
-                                            <Select.Option value="Activos Amortizables">Activos Amortizables (Hardware, PCs, Monitores)</Select.Option>
+                                            <Select.Option value="Axi Select">Axi Select</Select.Option>
+                                            <Select.Option value="Retiro Socios">Retiro Socios</Select.Option>
+                                            <Select.Option value="Otros">Otros</Select.Option>
                                         </Select>
                                     </Form.Item>
-                                    {expenseCategory === 'Activos Amortizables' && (
-                                        <Form.Item name="usefulLifeMonths" label="Vida Útil (Meses) para Depreciación" rules={[{ required: true }]}>
-                                            <InputNumber min={1} style={{ width: '100%' }} />
-                                        </Form.Item>
-                                    )}
-                                    <Form.Item name="description" label="Descripción">
-                                        <Input />
-                                    </Form.Item>
-                                    <Row gutter={16}>
-                                        <Col span={8}>
-                                            <Form.Item name="currency" label="Moneda" rules={[{ required: true }]} initialValue="USD">
-                                                <Select>
-                                                    <Select.Option value="USD">USD</Select.Option>
-                                                    <Select.Option value="ARS">ARS</Select.Option>
-                                                </Select>
-                                            </Form.Item>
-                                        </Col>
-                                        <Col span={16}>
-                                            <Form.Item name="amount" label="Monto" rules={[{ required: true }]}>
-                                                <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
-                                            </Form.Item>
-                                        </Col>
-                                    </Row>
-                                    {expenseCurrency === 'ARS' && (
-                                        <Form.Item name="exchangeRate" label="Tipo de Cambio (ARS por 1 USD)" rules={[{ required: true }]}>
-                                            <InputNumber min={1} style={{ width: '100%' }} />
-                                        </Form.Item>
-                                    )}
-                                    <Button type="primary" htmlType="submit" block danger>Registrar Gasto</Button>
-                                </Form>
-                            </Modal>
-
-                            <Modal title="Registrar Cobro" open={isIncomeModalVisible} onCancel={() => setIsIncomeModalVisible(false)} footer={null}>
-                                <Form form={incomeForm} layout="vertical" onFinish={handleIncomeSubmit}>
-                                    <Form.Item name="date" label="Fecha" rules={[{ required: true }]} initialValue={dayjs().format('YYYY-MM-DD')}>
-                                        <Input type="date" />
-                                    </Form.Item>
-                                    <Form.Item name="category" label="Categoría" rules={[{ required: true }]}>
-                                        <Select>
-                                            <Select.Option value="Retiro Axi">Retiro Axi Select</Select.Option>
-                                            <Select.Option value="Retiro Fondeo">Retiro de Cuenta Fondeada</Select.Option>
-                                            <Select.Option value="Devolución">Devolución / Reembolso</Select.Option>
-                                            <Select.Option value="Otro">Otro Ingreso</Select.Option>
-                                        </Select>
-                                    </Form.Item>
-                                    <Form.Item name="description" label="Descripción">
-                                        <Input />
-                                    </Form.Item>
-                                    <Form.Item name="currency" label="Moneda" initialValue="USD" hidden><Input /></Form.Item>
-                                    <Form.Item name="amount" label="Monto Recibido (USD netos)" rules={[{ required: true }]}>
+                                    <Form.Item name="amount" label="Monto" rules={[{ required: true }]}>
                                         <InputNumber min={0} step={0.01} style={{ width: '100%' }} prefix="$" />
                                     </Form.Item>
-                                    <Button type="primary" htmlType="submit" block style={{ background: '#00b96b', borderColor: '#00b96b' }}>Registrar Cobro</Button>
+                                    <Form.Item name="description" label="Descripción">
+                                        <Input />
+                                    </Form.Item>
+                                    <Button type="primary" htmlType="submit" block style={{ background: '#00b96b', borderColor: '#00b96b' }}>Guardar</Button>
                                 </Form>
                             </Modal>
 
